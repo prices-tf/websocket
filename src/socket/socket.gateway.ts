@@ -10,7 +10,7 @@ import * as jwt from 'jsonwebtoken';
 import { Request } from 'express';
 import { ConfigService } from '@nestjs/config';
 import { Config, RedisConfig, Services } from '../common/config/configuration';
-import { OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import IORedis from 'ioredis';
 import * as jwksClient from 'jwks-rsa';
 
@@ -28,6 +28,8 @@ export class SocketGateway
     OnModuleInit,
     OnModuleDestroy
 {
+  private readonly logger = new Logger(SocketGateway.name);
+
   @WebSocketServer()
   private readonly server: Server;
 
@@ -121,10 +123,13 @@ export class SocketGateway
   afterInit() {
     this.server.options = {
       verifyClient: (info, callback) => {
+        this.logger.debug('Verifying new client');
+
         // Extract authorization type and token
         const [type, token] = info.req.headers.authorization.split(' ');
 
         if (type !== 'Bearer') {
+          this.logger.debug('Missing access token');
           callback(false, 400, 'Missing access token');
           return;
         }
@@ -134,11 +139,13 @@ export class SocketGateway
         });
 
         if (decoded === null) {
+          this.logger.debug('Invalid token');
           callback(false);
           return;
         }
 
         if (!decoded.header.kid) {
+          this.logger.debug('Token is missing kid');
           callback(false);
           return;
         }
@@ -147,6 +154,7 @@ export class SocketGateway
           .then((publicKey) => {
             jwt.verify(token, publicKey.getPublicKey(), (err) => {
               if (err) {
+                this.logger.error('Error verifying JWT: ' + err.message);
                 callback(false);
               } else {
                 callback(true);
@@ -156,9 +164,15 @@ export class SocketGateway
           .catch((err) => {
             // Error getting signing key
             if (err instanceof jwksClient.SigningKeyNotFoundError) {
+              this.logger.debug(
+                'Signing key ("' +
+                  decoded.header.kid +
+                  '") not found not exist',
+              );
               // Signing key does not exist
               callback(false);
             } else {
+              this.logger.error('Error getting signing key: ' + err.message);
               // Some other error
               callback(false, 500);
             }
@@ -171,6 +185,8 @@ export class SocketGateway
    * Called after verifyClient
    */
   async handleConnection(ws: CustomWebSocket, req: Request) {
+    this.logger.debug('Client connected');
+
     // Decode jwt
     const [, token] = req.headers.authorization.split(' ');
     const decoded = jwt.decode(token, { json: true });
@@ -234,5 +250,6 @@ export class SocketGateway
 
   handleDisconnect(ws: CustomWebSocket) {
     // Do nothing
+    this.logger.debug('Client disconnected');
   }
 }
