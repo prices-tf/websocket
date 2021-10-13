@@ -153,9 +153,15 @@ export class SocketGateway
               }
             });
           })
-          .catch(() => {
+          .catch((err) => {
             // Error getting signing key
-            callback(false, 500);
+            if (err instanceof jwksClient.SigningKeyNotFoundError) {
+              // Signing key does not exist
+              callback(false);
+            } else {
+              // Some other error
+              callback(false, 500);
+            }
           });
       },
     };
