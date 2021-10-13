@@ -16,8 +16,7 @@ import * as jwksClient from 'jwks-rsa';
 
 type CustomWebSocket = WebSocket & {
   isAlive: boolean;
-  pingInterval: NodeJS.Timer;
-  expireTimeout: NodeJS.Timeout;
+  expiresAt: Date;
 };
 
 @WebSocketGateway()
@@ -34,6 +33,9 @@ export class SocketGateway
 
   private readonly subscriberClient = this.newRedisClient();
 
+  private pingInterval: NodeJS.Timer;
+  private expireInterval: NodeJS.Timer;
+
   private readonly JWKS = jwksClient({
     jwksUri: this.configService.get<Services>('services').jwk + '/jwks',
   });
@@ -45,6 +47,8 @@ export class SocketGateway
   }
 
   async onModuleInit() {
+    // Create ping interval for the specific socket
+
     // Subscribe to Redis websocket messages
     await this.subscriberClient.subscribe('websocket');
 
@@ -77,11 +81,15 @@ export class SocketGateway
         ),
       );
     });
+
+    this.createTimers();
   }
 
   async onModuleDestroy() {
     // Close Redis client before stopping
     await this.subscriberClient.quit();
+
+    this.clearTimers();
   }
 
   private newRedisClient() {
@@ -161,28 +169,10 @@ export class SocketGateway
     const [, token] = req.headers.authorization.split(' ');
     const decoded = jwt.decode(token, { json: true });
 
-    const expiresIn = Math.min(decoded.exp * 1000 - new Date().getTime());
-
-    // Create timeout for when the JWT expires
-    ws.expireTimeout = setTimeout(() => {
-      ws.terminate();
-    }, Math.min(expiresIn, 5 * 30 * 1000));
+    ws.expiresAt = new Date(decoded.exp * 1000);
 
     // Stop unresponsive sockets
     ws.isAlive = true;
-
-    // Create ping interval for the specific socket
-    ws.pingInterval = setInterval(() => {
-      if (ws.isAlive === false) {
-        // Socket didn't respond in time
-        return ws.terminate();
-      }
-
-      // Reset isAlive
-      ws.isAlive = false;
-      // Ping socket
-      ws.ping();
-    }, 30000);
 
     ws.on('pong', () => {
       // Received pong, socket is alive
@@ -190,9 +180,53 @@ export class SocketGateway
     });
   }
 
+  private clearTimers() {
+    clearInterval(this.pingInterval);
+    clearInterval(this.expireInterval);
+  }
+
+  private createTimers() {
+    this.pingInterval = setInterval(() => {
+      this.server.clients.forEach((ws: CustomWebSocket) => {
+        if (ws.readyState !== ws.OPEN) {
+          return;
+        }
+
+        if (ws.isAlive === false) {
+          // Socket didn't respond in time / access token has expired
+          return ws.terminate();
+        }
+
+        // Reset isAlive
+        ws.isAlive = false;
+        // Ping socket
+        ws.ping();
+      });
+    }, 30000);
+
+    this.expireInterval = setInterval(() => {
+      const now = new Date().getTime();
+
+      this.server.clients.forEach((ws: CustomWebSocket) => {
+        if (ws.readyState !== ws.OPEN) {
+          return;
+        }
+
+        if (ws.expiresAt.getTime() <= now) {
+          // Access token has expired
+          ws.send(
+            JSON.stringify({
+              type: 'ACCESS_TOKEN_EXPIRED',
+              data: null,
+            }),
+          );
+          return ws.terminate();
+        }
+      });
+    }, 1000);
+  }
+
   handleDisconnect(ws: CustomWebSocket) {
-    // Clear intervals and timeouts when the socket disconnects
-    clearInterval(ws.pingInterval);
-    clearTimeout(ws.expireTimeout);
+    // Do nothing
   }
 }
