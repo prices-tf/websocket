@@ -9,9 +9,10 @@ import { Server, WebSocket } from 'ws';
 import * as jwt from 'jsonwebtoken';
 import { Request } from 'express';
 import { ConfigService } from '@nestjs/config';
-import { Config, RedisConfig } from '../common/config/configuration';
+import { Config, RedisConfig, Services } from '../common/config/configuration';
 import { OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import IORedis from 'ioredis';
+import * as jwksClient from 'jwks-rsa';
 
 type CustomWebSocket = WebSocket & {
   isAlive: boolean;
@@ -32,6 +33,10 @@ export class SocketGateway
   private readonly server: Server;
 
   private readonly subscriberClient = this.newRedisClient();
+
+  private readonly JWKS = jwksClient({
+    jwksUri: this.configService.get<Services>('services').jwk + '/jwks',
+  });
 
   constructor(private readonly configService: ConfigService<Config>) {}
 
@@ -112,18 +117,38 @@ export class SocketGateway
         const [type, token] = info.req.headers.authorization.split(' ');
 
         if (type !== 'Bearer') {
+          callback(false, 400, 'Missing access token');
+          return;
+        }
+
+        const decoded = jwt.decode(token, {
+          complete: true,
+        });
+
+        if (decoded === null) {
           callback(false);
           return;
         }
 
-        // Verify that the JWT is valid
-        jwt.verify(token, this.configService.get('jwtSecret'), (err) => {
-          if (err) {
-            callback(false);
-          } else {
-            callback(true);
-          }
-        });
+        if (!decoded.header.kid) {
+          callback(false);
+          return;
+        }
+
+        return this.JWKS.getSigningKey(decoded.header.kid)
+          .then((publicKey) => {
+            jwt.verify(token, publicKey.getPublicKey(), (err) => {
+              if (err) {
+                callback(false);
+              } else {
+                callback(true);
+              }
+            });
+          })
+          .catch(() => {
+            // Error getting signing key
+            callback(false, 500);
+          });
       },
     };
   }
