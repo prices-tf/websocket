@@ -161,10 +161,12 @@ export class SocketGateway
     const [, token] = req.headers.authorization.split(' ');
     const decoded = jwt.decode(token, { json: true });
 
+    const expiresIn = Math.min(decoded.exp * 1000 - new Date().getTime());
+
     // Create timeout for when the JWT expires
     ws.expireTimeout = setTimeout(() => {
       ws.terminate();
-    }, decoded.exp * 1000 - new Date().getTime());
+    }, Math.min(expiresIn, 5 * 30 * 1000));
 
     // Stop unresponsive sockets
     ws.isAlive = true;
