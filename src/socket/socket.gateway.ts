@@ -215,6 +215,7 @@ export class SocketGateway
         }
 
         if (ws.isAlive === false) {
+          this.logger.debug("Client didn't respond to ping");
           // Socket didn't respond in time / access token has expired
           return ws.terminate();
         }
@@ -235,6 +236,7 @@ export class SocketGateway
         }
 
         if (ws.expiresAt.getTime() <= now) {
+          this.logger.debug('Access token expired');
           // Access token has expired
           ws.send(
             JSON.stringify({
