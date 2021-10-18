@@ -78,7 +78,7 @@ export class SocketGateway
         ws.send(
           JSON.stringify({
             type: parsed.type,
-            data: parsed.payload,
+            data: parsed.data,
           }),
         ),
       );
