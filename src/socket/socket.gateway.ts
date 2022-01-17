@@ -251,9 +251,8 @@ export class SocketGateway
 
       this.server.clients.forEach((ws: CustomWebSocket) => {
         if (
-          ws.readyState !== ws.OPEN &&
-          !ws.isAuthenticated &&
-          !ws.authExpired
+          ws.readyState !== ws.OPEN ||
+          (!ws.isAuthenticated && !ws.authExpired)
         ) {
           return;
         }
@@ -281,7 +280,7 @@ export class SocketGateway
 
   private authRequired(ws: CustomWebSocket): void {
     // Send auth required message
-    const message: AuthRequiredMessage = {
+    const authRequiredMessage: AuthRequiredMessage = {
       type: 'AUTH_REQUIRED',
       data: {
         timeout: 1000,
@@ -290,23 +289,23 @@ export class SocketGateway
 
     this.logger.debug('Notifying client that authentication is required');
 
-    this.sendMessage(ws, message);
+    this.sendMessage(ws, authRequiredMessage);
 
     ws.authTimeout = setTimeout(() => {
       if (ws.authExpired) {
-        const message: AuthExpiredMessage = {
+        const authExpiredMessage: AuthExpiredMessage = {
           type: 'AUTH_EXPIRED',
           data: null,
         };
 
         this.logger.debug('Client did not authenticate again in time');
-        this.sendMessage(ws, message);
-        ws.terminate();
+        this.sendMessage(ws, authExpiredMessage);
+        ws.close();
       } else if (!ws.isAuthenticated) {
         this.logger.debug('Client did not authenticate in time');
-        ws.close(undefined, 'Did not authenticate in time');
+        ws.close();
       }
-    }, message.data.timeout);
+    }, authRequiredMessage.data.timeout);
   }
 
   private async validateJWT(
