@@ -13,10 +13,16 @@ import { Config, RedisConfig, Services } from '../common/config/configuration';
 import { Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import IORedis from 'ioredis';
 import * as jwksClient from 'jwks-rsa';
+import { AuthRequiredMessage } from './interfaces/auth-required.interface';
+import { WebsocketMessage } from './interfaces/ws-message.interface';
+import { AuthMessage } from './interfaces/auth.interface';
+import { AccessTokenExpiredMessage } from './interfaces/auth-expired.interface';
 
 type CustomWebSocket = WebSocket & {
   isAlive: boolean;
-  expiresAt: Date;
+  isAuthenticated: boolean;
+  expiresAt?: Date;
+  authTimeout?: ReturnType<typeof setTimeout>;
 };
 
 @WebSocketGateway()
@@ -75,12 +81,10 @@ export class SocketGateway
 
       // Send message to all connected clients
       this.server.clients.forEach((ws) =>
-        ws.send(
-          JSON.stringify({
-            type: parsed.type,
-            data: parsed.data,
-          }),
-        ),
+        this.sendMessage(ws, {
+          type: parsed.type,
+          data: parsed.data,
+        }),
       );
     });
 
@@ -126,7 +130,7 @@ export class SocketGateway
         this.logger.debug('Verifying new client');
 
         if (info.req.headers.authorization === undefined) {
-          callback(false, 400, 'Missing access token');
+          callback(true);
           return;
         }
 
@@ -157,11 +161,47 @@ export class SocketGateway
   async handleConnection(ws: CustomWebSocket, req: Request) {
     this.logger.debug('Client connected');
 
-    // Decode jwt
-    const [, token] = req.headers.authorization.split(' ');
-    const decoded = jwt.decode(token, { json: true });
+    ws.on('message', (message) => {
+      let parsed: WebsocketMessage;
 
-    ws.expiresAt = new Date(decoded.exp * 1000);
+      // Parse message
+      try {
+        parsed = JSON.parse(message.toString('utf-8'));
+      } catch (err) {}
+
+      if (parsed.type === 'AUTH') {
+        // TODO: Validate message?
+        this.handleAuthMessage(ws, parsed as AuthMessage);
+      }
+    });
+
+    if (req.headers.authorization === undefined) {
+      // Websocket has not authenticated yet
+      ws.isAuthenticated = false;
+
+      // Send auth required message
+      const message: AuthRequiredMessage = {
+        type: 'AUTH_REQUIRED',
+        data: {
+          timeout: 1000,
+        },
+      };
+
+      this.sendMessage(ws, message);
+
+      ws.authTimeout = setTimeout(() => {
+        if (!ws.isAuthenticated) {
+          ws.close(undefined, 'Did not authenticate in time');
+        }
+      }, message.data.timeout);
+    } else {
+      // Decode jwt
+      const [, token] = req.headers.authorization.split(' ');
+      const decoded = jwt.decode(token, { json: true });
+
+      ws.expiresAt = new Date(decoded.exp * 1000);
+      ws.isAuthenticated = true;
+    }
 
     // Stop unresponsive sockets
     ws.isAlive = true;
@@ -170,6 +210,29 @@ export class SocketGateway
       // Received pong, socket is alive
       ws.isAlive = true;
     });
+  }
+
+  private handleAuthMessage(ws: CustomWebSocket, message: AuthMessage): void {
+    const token = message?.data?.accessToken;
+
+    if (!token) {
+      return;
+    }
+
+    this.validateJWT(token)
+      .then(({ isValid, payload }) => {
+        if (!isValid) {
+          return;
+        }
+
+        ws.expiresAt = new Date(payload.exp * 1000);
+        ws.isAuthenticated = true;
+        clearTimeout(ws.authTimeout);
+        this.logger.debug('Client authenticated');
+      })
+      .catch((err) => {
+        this.logger.error('Error verifying JWT: ' + err.message);
+      });
   }
 
   private clearTimers() {
@@ -201,19 +264,20 @@ export class SocketGateway
       const now = new Date().getTime();
 
       this.server.clients.forEach((ws: CustomWebSocket) => {
-        if (ws.readyState !== ws.OPEN) {
+        if (ws.readyState !== ws.OPEN && !ws.isAuthenticated) {
           return;
         }
 
         if (ws.expiresAt.getTime() <= now) {
           this.logger.debug('Access token expired');
           // Access token has expired
-          ws.send(
-            JSON.stringify({
-              type: 'ACCESS_TOKEN_EXPIRED',
-              data: null,
-            }),
-          );
+
+          const message: AccessTokenExpiredMessage = {
+            type: 'ACCESS_TOKEN_EXPIRED',
+            data: null,
+          };
+
+          this.sendMessage(ws, message);
           return ws.terminate();
         }
       });
@@ -223,6 +287,10 @@ export class SocketGateway
   handleDisconnect(ws: CustomWebSocket) {
     // Do nothing
     this.logger.debug('Client disconnected');
+  }
+
+  private sendMessage(ws: WebSocket, message: WebsocketMessage): void {
+    ws.send(JSON.stringify(message));
   }
 
   private async validateJWT(
