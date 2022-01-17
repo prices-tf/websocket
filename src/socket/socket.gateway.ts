@@ -139,48 +139,13 @@ export class SocketGateway
           return;
         }
 
-        const decoded = jwt.decode(token, {
-          complete: true,
-        });
-
-        if (decoded === null) {
-          this.logger.debug('Invalid token');
-          callback(false);
-          return;
-        }
-
-        if (!decoded.header.kid) {
-          this.logger.debug('Token is missing kid');
-          callback(false);
-          return;
-        }
-
-        return this.JWKS.getSigningKey(decoded.header.kid)
-          .then((publicKey) => {
-            jwt.verify(token, publicKey.getPublicKey(), (err) => {
-              if (err) {
-                this.logger.error('Error verifying JWT: ' + err.message);
-                callback(false);
-              } else {
-                callback(true);
-              }
-            });
+        this.validateJWT(token)
+          .then(({ isValid }) => {
+            callback(isValid);
           })
           .catch((err) => {
-            // Error getting signing key
-            if (err instanceof jwksClient.SigningKeyNotFoundError) {
-              this.logger.debug(
-                'Signing key ("' +
-                  decoded.header.kid +
-                  '") not found not exist',
-              );
-              // Signing key does not exist
-              callback(false);
-            } else {
-              this.logger.error('Error getting signing key: ' + err.message);
-              // Some other error
-              callback(false, 500);
-            }
+            this.logger.error('Error validating jwt: ' + err.message);
+            callback(false);
           });
       },
     };
@@ -258,5 +223,47 @@ export class SocketGateway
   handleDisconnect(ws: CustomWebSocket) {
     // Do nothing
     this.logger.debug('Client disconnected');
+  }
+
+  private async validateJWT(
+    token: string,
+  ): Promise<{ isValid: boolean; payload?: jwt.JwtPayload }> {
+    const decoded = jwt.decode(token, {
+      complete: true,
+    });
+
+    if (decoded === null || !decoded.header.kid) {
+      return {
+        isValid: false,
+      };
+    }
+
+    let publicKey: jwksClient.SigningKey = null;
+
+    try {
+      publicKey = await this.JWKS.getSigningKey(decoded.header.kid);
+    } catch (err) {
+      if (err instanceof jwksClient.SigningKeyNotFoundError) {
+        return {
+          isValid: false,
+        };
+      }
+
+      // Generic error
+      throw err;
+    }
+
+    return new Promise((resolve, reject) => {
+      jwt.verify(token, publicKey.getPublicKey(), (err) => {
+        if (err) {
+          return reject(err);
+        }
+
+        return resolve({
+          isValid: true,
+          payload: decoded.payload,
+        });
+      });
+    });
   }
 }
