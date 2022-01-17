@@ -272,6 +272,7 @@ export class SocketGateway
   handleDisconnect(ws: CustomWebSocket) {
     // Do nothing
     this.logger.debug('Client disconnected');
+    clearTimeout(ws.authTimeout);
   }
 
   private sendMessage(ws: WebSocket, message: WebsocketMessage): void {
