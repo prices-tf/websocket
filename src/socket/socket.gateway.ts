@@ -125,6 +125,11 @@ export class SocketGateway
       verifyClient: (info, callback) => {
         this.logger.debug('Verifying new client');
 
+        if (info.req.headers.authorization === undefined) {
+          callback(false, 400, 'Missing access token');
+          return;
+        }
+
         // Extract authorization type and token
         const [type, token] = info.req.headers.authorization.split(' ');
 
