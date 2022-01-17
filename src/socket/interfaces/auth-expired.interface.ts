@@ -1,4 +1,4 @@
-export interface AccessTokenExpiredMessage {
-  type: 'ACCESS_TOKEN_EXPIRED';
+export interface AuthExpiredMessage {
+  type: 'AUTH_EXPIRED';
   data: null;
 }
