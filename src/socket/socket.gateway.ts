@@ -81,12 +81,14 @@ export class SocketGateway
       }
 
       // Send message to all connected clients
-      this.server.clients.forEach((ws) =>
-        this.sendMessage(ws, {
-          type: parsed.type,
-          data: parsed.data,
-        }),
-      );
+      this.server.clients.forEach((ws: CustomWebSocket) => {
+        if (ws.isAuthenticated) {
+          this.sendMessage(ws, {
+            type: parsed.type,
+            data: parsed.data,
+          });
+        }
+      });
     });
 
     this.createTimers();
