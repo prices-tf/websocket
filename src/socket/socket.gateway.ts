@@ -162,7 +162,9 @@ export class SocketGateway
    * Called after verifyClient
    */
   async handleConnection(ws: CustomWebSocket, req: Request) {
-    this.logger.debug('Client connected');
+    this.logger.debug(
+      'Client connected (client count: ' + this.server.clients.size + ')',
+    );
 
     ws.on('message', (message) => {
       let parsed: WebsocketMessage;
