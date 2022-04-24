@@ -11,7 +11,7 @@ import { Request } from 'express';
 import { ConfigService } from '@nestjs/config';
 import { Config, RedisConfig, Services } from '../common/config/configuration';
 import { Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
-import IORedis from 'ioredis';
+import Redis, { RedisOptions } from 'ioredis';
 import * as jwksClient from 'jwks-rsa';
 import { AuthRequiredMessage } from './interfaces/auth-required.interface';
 import { WebsocketMessage } from './interfaces/ws-message.interface';
@@ -104,7 +104,7 @@ export class SocketGateway
   private newRedisClient() {
     const redisConfig = this.configService.get<RedisConfig>('redis');
 
-    let options: IORedis.RedisOptions;
+    let options: RedisOptions;
 
     if (redisConfig.isSentinel) {
       options = {
@@ -124,7 +124,7 @@ export class SocketGateway
       };
     }
 
-    return new IORedis(options);
+    return new Redis(options);
   }
 
   afterInit() {
@@ -348,7 +348,7 @@ export class SocketGateway
 
         return resolve({
           isValid: true,
-          payload: decoded.payload,
+          payload: decoded.payload as jwt.JwtPayload,
         });
       });
     });
